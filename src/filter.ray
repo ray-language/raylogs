@@ -1,0 +1,161 @@
+// raylogs — filter expressions applied to parsed events.
+//
+// Grammar (first operator found wins, longest first):
+//   key=value    key!=value    key~regex    key!~regex
+//   key>n  key<n  key>=n  key<=n            (numeric; non-numeric fields never match)
+import std/regex;
+from std/regex import Regex, Matcher, compile;
+from parse import Event, field_of;
+
+pub enum Op {
+    Eq,
+    Ne,
+    Gt,
+    Lt,
+    Ge,
+    Le,
+    Match,
+    NotMatch,
+}
+
+pub struct Filter {
+    key: string,
+    op: Op,
+    value: string,
+    num: float,
+    re: Option<Regex>,
+}
+
+struct OpHit {
+    pos: int,
+    len: int,
+    op: Op,
+}
+
+fn find_op(s: string) -> Option<OpHit> {
+    var best: Option<OpHit> = Option.None;
+    let two = [("!=", Op.Ne), (">=", Op.Ge), ("<=", Op.Le), ("!~", Op.NotMatch)];
+    let one = [("=", Op.Eq), ("~", Op.Match), (">", Op.Gt), ("<", Op.Lt)];
+    for (tok, op) in two.iter() {
+        match (index_of(s, tok)) {
+            Option.Some(i) => {
+                best = better(best, OpHit { pos: i, len: 2, op: op });
+            },
+            Option.None => { },
+        }
+    }
+    for (tok, op) in one.iter() {
+        match (index_of(s, tok)) {
+            Option.Some(i) => {
+                best = better(best, OpHit { pos: i, len: 1, op: op });
+            },
+            Option.None => { },
+        }
+    }
+    best
+}
+
+// The leftmost hit wins; at the same position the longer token wins (so `!=`
+// beats the `=` inside it).
+fn better(cur: Option<OpHit>, cand: OpHit) -> Option<OpHit> {
+    match (cur) {
+        Option.Some(c) => {
+            if (cand.pos < c.pos || cand.pos == c.pos && cand.len > c.len) {
+                Option.Some(cand)
+            } else {
+                Option.Some(c)
+            }
+        },
+        Option.None => Option.Some(cand),
+    }
+}
+
+pub fn parse_filter(s: string) -> Result<Filter, string> {
+    match (find_op(s)) {
+        Option.Some(hit) => {
+            let key = s.substring(0, hit.pos).trim();
+            let value = s.substring(hit.pos + hit.len, s.len()).trim();
+            if (key == "") {
+                return Result.Err("filter '" + s + "': missing field name");
+            }
+            var num = 0.0;
+            var re: Option<Regex> = Option.None;
+            match (hit.op) {
+                Op.Gt => {
+                    num = need_num(s, value)?;
+                },
+                Op.Lt => {
+                    num = need_num(s, value)?;
+                },
+                Op.Ge => {
+                    num = need_num(s, value)?;
+                },
+                Op.Le => {
+                    num = need_num(s, value)?;
+                },
+                Op.Match => {
+                    re = Option.Some(compile(value)?);
+                },
+                Op.NotMatch => {
+                    re = Option.Some(compile(value)?);
+                },
+                _ => { },
+            }
+            Result.Ok(Filter { key: key, op: hit.op, value: value, num: num, re: re })
+        },
+        Option.None => Result.Err("filter '" + s + "': expected one of = != ~ !~ > < >= <="),
+    }
+}
+
+fn need_num(expr: string, value: string) -> Result<float, string> {
+    match (parse_float(value)) {
+        Option.Some(f) => Result.Ok(f),
+        Option.None => Result.Err("filter '" + expr + "': '" + value + "' is not a number"),
+    }
+}
+
+pub fn accept(f: Filter, e: Event) -> bool {
+    match (field_of(e, f.key)) {
+        Option.Some(v) => {
+            match (f.op) {
+                Op.Eq => v == f.value,
+                Op.Ne => v != f.value,
+                Op.Gt => num_cmp(v, f.num, 1, false),
+                Op.Lt => num_cmp(v, f.num, 0 - 1, false),
+                Op.Ge => num_cmp(v, f.num, 1, true),
+                Op.Le => num_cmp(v, f.num, 0 - 1, true),
+                Op.Match => re_match(f, v),
+                Op.NotMatch => !re_match(f, v),
+            }
+        },
+        Option.None => false,
+    }
+}
+
+fn num_cmp(v: string, target: float, dir: int, or_eq: bool) -> bool {
+    match (parse_float(v.trim())) {
+        Option.Some(x) => {
+            if (x == target) {
+                return or_eq;
+            }
+            if (dir > 0) { x > target } else { x < target }
+        },
+        Option.None => false,
+    }
+}
+
+fn re_match(f: Filter, v: string) -> bool {
+    match (f.re) {
+        Option.Some(re) => re.search(v),
+        Option.None => false,
+    }
+}
+
+pub fn accept_all(filters: [Filter], e: Event) -> bool {
+    for f in filters {
+        if (!accept(f, e)) {
+            return false;
+        }
+    }
+    true
+}

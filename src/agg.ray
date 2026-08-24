@@ -1,0 +1,234 @@
+// raylogs — aggregations: count-by (grouped counts) and numeric stats with
+// nearest-rank percentiles.
+import std/math;
+from parse import Event, field_of;
+
+pub struct CountBy {
+    key: string,
+    counts: Map<string, int>,
+    total: int,
+    missing: int,
+}
+
+pub fn count_by(key: string) -> CountBy {
+    var counts: Map<string, int> = Map.new();
+    CountBy { key: key, counts: counts, total: 0, missing: 0 }
+}
+
+pub fn add_count(c: CountBy, e: Event) {
+    match (field_of(e, c.key)) {
+        Option.Some(v) => {
+            let n = match (get(c.counts, v)) {
+                Option.Some(x) => x,
+                Option.None => 0,
+            };
+            c.counts.insert(v, n + 1);
+            c.total = c.total + 1;
+        },
+        Option.None => {
+            c.missing = c.missing + 1;
+        },
+    }
+}
+
+pub struct Entry {
+    name: string,
+    count: int,
+}
+
+fn merge_entries(a: [Entry], b: [Entry]) -> [Entry] {
+    var out: [Entry] = [];
+    var i = 0;
+    var j = 0;
+    while (i < a.len() && j < b.len()) {
+        if (entry_before(a[i], b[j])) {
+            out.push(a[i]);
+            i = i + 1;
+        } else {
+            out.push(b[j]);
+            j = j + 1;
+        }
+    }
+    while (i < a.len()) {
+        out.push(a[i]);
+        i = i + 1;
+    }
+    while (j < b.len()) {
+        out.push(b[j]);
+        j = j + 1;
+    }
+    out
+}
+
+// Descending by count; ties alphabetically by name for stable output.
+fn entry_before(x: Entry, y: Entry) -> bool {
+    if (x.count != y.count) {
+        return x.count > y.count;
+    }
+    x.name <= y.name
+}
+
+fn sort_entries(xs: [Entry]) -> [Entry] {
+    if (xs.len() <= 1) {
+        return xs;
+    }
+    let mid = xs.len() / 2;
+    var left: [Entry] = [];
+    var right: [Entry] = [];
+    var i = 0;
+    while (i < xs.len()) {
+        if (i < mid) {
+            left.push(xs[i]);
+        } else {
+            right.push(xs[i]);
+        }
+        i = i + 1;
+    }
+    merge_entries(sort_entries(left), sort_entries(right))
+}
+
+// The n most frequent groups (all of them if n <= 0), most frequent first.
+pub fn top_entries(c: CountBy, n: int) -> [Entry] {
+    var all: [Entry] = [];
+    for k in c.counts.keys() {
+        match (get(c.counts, k)) {
+            Option.Some(v) => {
+                all.push(Entry { name: k, count: v });
+            },
+            Option.None => { },
+        }
+    }
+    let ordered = sort_entries(all);
+    if (n <= 0 || ordered.len() <= n) {
+        return ordered;
+    }
+    var out: [Entry] = [];
+    var i = 0;
+    while (i < n) {
+        out.push(ordered[i]);
+        i = i + 1;
+    }
+    out
+}
+
+pub struct Stats {
+    key: string,
+    values: [float],
+    non_numeric: int,
+    missing: int,
+}
+
+pub fn stats(key: string) -> Stats {
+    var values: [float] = [];
+    Stats { key: key, values: values, non_numeric: 0, missing: 0 }
+}
+
+pub fn add_stat(s: Stats, e: Event) {
+    match (field_of(e, s.key)) {
+        Option.Some(v) => {
+            match (parse_float(v.trim())) {
+                Option.Some(f) => {
+                    s.values.push(f);
+                },
+                Option.None => {
+                    s.non_numeric = s.non_numeric + 1;
+                },
+            }
+        },
+        Option.None => {
+            s.missing = s.missing + 1;
+        },
+    }
+}
+
+pub struct StatsResult {
+    count: int,
+    min: float,
+    max: float,
+    avg: float,
+    p50: float,
+    p90: float,
+    p99: float,
+}
+
+// Own float mergesort: the builtin `sort` on [float] compiles on the VM but
+// breaks the native transpiler (its __ray_sort requires Rust's Ord, which f64
+// does not implement). Remove once the toolchain sorts floats natively.
+fn merge_floats(a: [float], b: [float]) -> [float] {
+    var out: [float] = [];
+    var i = 0;
+    var j = 0;
+    while (i < a.len() && j < b.len()) {
+        if (a[i] <= b[j]) {
+            out.push(a[i]);
+            i = i + 1;
+        } else {
+            out.push(b[j]);
+            j = j + 1;
+        }
+    }
+    while (i < a.len()) {
+        out.push(a[i]);
+        i = i + 1;
+    }
+    while (j < b.len()) {
+        out.push(b[j]);
+        j = j + 1;
+    }
+    out
+}
+
+fn sort_floats(xs: [float]) -> [float] {
+    if (xs.len() <= 1) {
+        return xs;
+    }
+    let mid = xs.len() / 2;
+    var left: [float] = [];
+    var right: [float] = [];
+    var i = 0;
+    while (i < xs.len()) {
+        if (i < mid) {
+            left.push(xs[i]);
+        } else {
+            right.push(xs[i]);
+        }
+        i = i + 1;
+    }
+    merge_floats(sort_floats(left), sort_floats(right))
+}
+
+// Nearest-rank percentile over a sorted array (q in [0, 1]).
+fn percentile(ordered: [float], q: float) -> float {
+    let n = ordered.len();
+    var rank = math.ceil(q * n as float) as int;
+    if (rank < 1) {
+        rank = 1;
+    }
+    if (rank > n) {
+        rank = n;
+    }
+    ordered[rank - 1]
+}
+
+pub fn finish_stats(s: Stats) -> Option<StatsResult> {
+    if (s.values.len() == 0) {
+        return Option.None;
+    }
+    let ordered = sort_floats(s.values);
+    let n = ordered.len();
+    var total = 0.0;
+    for v in ordered {
+        total = total + v;
+    }
+    Option.Some(
+        StatsResult {
+            count: n,
+            min: ordered[0],
+            max: ordered[n - 1],
+            avg: total / n as float,
+            p50: percentile(ordered, 0.5),
+            p90: percentile(ordered, 0.9),
+            p99: percentile(ordered, 0.99)
+        }
+    )
+}

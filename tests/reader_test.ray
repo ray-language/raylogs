@@ -1,0 +1,75 @@
+// Reader tests over a real temp file: CRLF, missing final newline, UTF-8.
+import std/fs;
+import reader;
+
+fn read_all(path: string) -> [string] {
+    let r = match (reader.open(path, false)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => panic(e),
+    };
+    var out: [string] = [];
+    var done = false;
+    while (!done) {
+        match (reader.next_line(r)) {
+            Option.Some(line) => {
+                out.push(line);
+            },
+            Option.None => {
+                done = true;
+            },
+        }
+    }
+    reader.close_reader(r);
+    out
+}
+
+@test
+fn reads_lf_lines_and_tail_without_newline() {
+    let path = "/tmp/raylogs_reader_test_lf.txt";
+    match (fs.write_file(path, "one\ntwo\nthree")) {
+        Result.Ok(x) => { },
+        Result.Err(e) => panic(e),
+    }
+    let lines = read_all(path);
+    assert_eq(lines.len(), 3);
+    assert_eq(lines[0], "one");
+    assert_eq(lines[2], "three");
+    fs.remove_file(path);
+}
+
+@test
+fn strips_crlf_and_keeps_empty_lines() {
+    let path = "/tmp/raylogs_reader_test_crlf.txt";
+    match (fs.write_file(path, "a\r\n\r\nb\r\n")) {
+        Result.Ok(x) => { },
+        Result.Err(e) => panic(e),
+    }
+    let lines = read_all(path);
+    assert_eq(lines.len(), 3);
+    assert_eq(lines[0], "a");
+    assert_eq(lines[1], "");
+    assert_eq(lines[2], "b");
+    fs.remove_file(path);
+}
+
+@test
+fn utf8_lines_survive() {
+    let path = "/tmp/raylogs_reader_test_utf8.txt";
+    match (fs.write_file(path, "señal ñ\n日本語ログ\n")) {
+        Result.Ok(x) => { },
+        Result.Err(e) => panic(e),
+    }
+    let lines = read_all(path);
+    assert_eq(lines.len(), 2);
+    assert_eq(lines[0], "señal ñ");
+    assert_eq(lines[1], "日本語ログ");
+    fs.remove_file(path);
+}
+
+@test
+fn missing_file_is_an_error_value() {
+    match (reader.open("/tmp/raylogs_no_such_file_xyz", false)) {
+        Result.Err(e) => { },
+        Result.Ok(r) => panic("expected an error"),
+    }
+}

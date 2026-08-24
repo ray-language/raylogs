@@ -1,0 +1,108 @@
+// Parser tests: JSON lines, CSV (with and without header), regex captures.
+import parse;
+
+fn event_of(p: parse.Parser, line: string) -> parse.Event {
+    match (parse.parse_line(p, line)) {
+        parse.Parsed.Line(e) => e,
+        parse.Parsed.Skip => panic("expected an event, got Skip: " + line),
+        parse.Parsed.Bad => panic("expected an event, got Bad: " + line),
+    }
+}
+
+fn field(e: parse.Event, key: string) -> string {
+    match (parse.field_of(e, key)) {
+        Option.Some(v) => v,
+        Option.None => panic("missing field: " + key),
+    }
+}
+
+@test
+fn json_flattens_top_level_fields() {
+    let p = parse.json_lines();
+    let e = event_of(p, "{\"level\":\"info\",\"status\":200,\"ok\":true,\"note\":null}");
+    assert_eq(field(e, "level"), "info");
+    assert_eq(field(e, "status"), "200");
+    assert_eq(field(e, "ok"), "true");
+    assert_eq(field(e, "note"), "");
+}
+
+@test
+fn json_nested_values_stay_as_json() {
+    let p = parse.json_lines();
+    let e = event_of(p, "{\"ctx\":{\"a\":1},\"tags\":[\"x\",\"y\"]}");
+    assert_eq(field(e, "ctx"), "{\"a\":1}");
+    assert_eq(field(e, "tags"), "[\"x\",\"y\"]");
+}
+
+@test
+fn json_malformed_is_bad_and_blank_is_skip() {
+    let p = parse.json_lines();
+    match (parse.parse_line(p, "not json")) {
+        parse.Parsed.Bad => { },
+        _ => panic("malformed JSON should be Bad"),
+    }
+    match (parse.parse_line(p, "   ")) {
+        parse.Parsed.Skip => { },
+        _ => panic("blank line should be Skip"),
+    }
+}
+
+@test
+fn csv_header_names_columns() {
+    let p = parse.csv_lines(true);
+    match (parse.parse_line(p, "name,age")) {
+        parse.Parsed.Skip => { },
+        _ => panic("header line should be Skip"),
+    }
+    let e = event_of(p, "ana,31");
+    assert_eq(field(e, "name"), "ana");
+    assert_eq(field(e, "age"), "31");
+}
+
+@test
+fn csv_without_header_uses_positional_names() {
+    let p = parse.csv_lines(false);
+    let e = event_of(p, "a,\"b,c\",3");
+    assert_eq(field(e, "c1"), "a");
+    assert_eq(field(e, "c2"), "b,c");
+    assert_eq(field(e, "c3"), "3");
+}
+
+@test
+fn regex_groups_take_given_names_then_gn() {
+    let p = match (parse.regexp("(\\w+) (\\d+) (\\S+)", ["user", "code"])) {
+        Result.Ok(x) => x,
+        Result.Err(e) => panic(e),
+    };
+    let e = event_of(p, "ana 42 /home");
+    assert_eq(field(e, "user"), "ana");
+    assert_eq(field(e, "code"), "42");
+    assert_eq(field(e, "g3"), "/home");
+}
+
+@test
+fn regex_non_matching_line_is_bad() {
+    let p = match (parse.regexp("^\\d+$", [])) {
+        Result.Ok(x) => x,
+        Result.Err(e) => panic(e),
+    };
+    match (parse.parse_line(p, "abc")) {
+        parse.Parsed.Bad => { },
+        _ => panic("non-matching line should be Bad"),
+    }
+}
+
+@test
+fn plain_exposes_the_line_pseudo_field() {
+    let p = parse.plain();
+    let e = event_of(p, "hello world");
+    assert_eq(field(e, "line"), "hello world");
+    assert_eq(e.raw, "hello world");
+}
+
+@test
+fn fmt_num_drops_integral_decimals() {
+    assert_eq(parse.fmt_num(3.0), "3");
+    assert_eq(parse.fmt_num(0.0 - 7.0), "-7");
+    assert_eq(parse.fmt_num(3.14159), "3.1416");
+}

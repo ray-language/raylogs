@@ -1,0 +1,210 @@
+// raylogs — per-line parsers: plain, JSON lines, CSV and regex captures.
+import std/json;
+import std/regex;
+import std/csv;
+import std/math;
+
+// A parsed log line: the raw text plus its extracted fields (string-valued;
+// numeric comparison re-parses on demand).
+pub struct Event {
+    raw: string,
+    fields: Map<string, string>,
+}
+
+pub enum Parsed {
+    Line(Event),
+    Skip,
+    Bad,
+}
+
+pub enum Mode {
+    Plain,
+    JsonLines,
+    CsvLines,
+    Regexp,
+}
+
+pub struct Parser {
+    mode: Mode,
+    re: Option<regex.Regex>,
+    names: [string],
+    header: bool,
+    saw_header: bool,
+}
+
+pub fn plain() -> Parser {
+    var names: [string] = [];
+    var re: Option<regex.Regex> = Option.None;
+    Parser { mode: Mode.Plain, re: re, names: names, header: false, saw_header: false }
+}
+
+pub fn json_lines() -> Parser {
+    var names: [string] = [];
+    var re: Option<regex.Regex> = Option.None;
+    Parser { mode: Mode.JsonLines, re: re, names: names, header: false, saw_header: false }
+}
+
+// header=true: the first line names the columns; otherwise they are c1..cN.
+pub fn csv_lines(header: bool) -> Parser {
+    var names: [string] = [];
+    var re: Option<regex.Regex> = Option.None;
+    Parser { mode: Mode.CsvLines, re: re, names: names, header: header, saw_header: false }
+}
+
+// Capture groups become fields, named by `names` in order (g1..gN past the end).
+pub fn regexp(pattern: string, names: [string]) -> Result<Parser, string> {
+    let re = regex.compile(pattern)?;
+    Result.Ok(
+        Parser {
+            mode: Mode.Regexp,
+            re: Option.Some(re),
+            names: names,
+            header: false,
+            saw_header: false
+        }
+    )
+}
+
+// Formats a float the way a log reader expects: integers without the decimal
+// tail, everything else rounded to 4 decimals.
+pub fn fmt_num(f: float) -> string {
+    if (f == math.floor(f) && math.abs(f) < 1000000000000000.0) {
+        let n = f as int;
+        return to_string(n);
+    }
+    to_string(math.round(f * 10000.0) / 10000.0)
+}
+
+fn json_value_to_string(v: json.Json) -> string {
+    match (v) {
+        json.Json.JNull => "",
+        json.Json.JBool(b) => {
+            if (b) { "true" } else { "false" }
+        },
+        json.Json.JNum(f) => fmt_num(f),
+        json.Json.JStr(s) => s,
+        json.Json.JArray(items) => json.stringify(v),
+        json.Json.JObject(m) => json.stringify(v),
+    }
+}
+
+fn parse_json_line(line: string) -> Parsed {
+    match (json.parse(line)) {
+        Result.Ok(j) => {
+            var fields: Map<string, string> = Map.new();
+            match (j) {
+                json.Json.JObject(m) => {
+                    for k in m.keys() {
+                        match (get(m, k)) {
+                            Option.Some(v) => {
+                                fields.insert(k, json_value_to_string(v));
+                            },
+                            Option.None => { },
+                        }
+                    }
+                },
+                _ => {
+                    fields.insert("value", json_value_to_string(j));
+                },
+            }
+            Parsed.Line(Event { raw: line, fields: fields })
+        },
+        Result.Err(e) => Parsed.Bad,
+    }
+}
+
+fn parse_csv_line(p: Parser, line: string) -> Parsed {
+    match (csv.parse_csv(line)) {
+        Result.Ok(rows) => {
+            if (rows.len() == 0) {
+                return Parsed.Skip;
+            }
+            let row = rows[0];
+            if (p.header && !p.saw_header) {
+                p.saw_header = true;
+                var i = 0;
+                while (i < row.len()) {
+                    p.names.push(row[i]);
+                    i = i + 1;
+                }
+                return Parsed.Skip;
+            }
+            var fields: Map<string, string> = Map.new();
+            var i = 0;
+            while (i < row.len()) {
+                let name = if (i < p.names.len()) { p.names[i] } else { "c" + to_string(i + 1) };
+                fields.insert(name, row[i]);
+                i = i + 1;
+            }
+            Parsed.Line(Event { raw: line, fields: fields })
+        },
+        Result.Err(e) => Parsed.Bad,
+    }
+}
+
+fn parse_regex_line(p: Parser, line: string) -> Parsed {
+    match (p.re) {
+        Option.Some(re) => {
+            match (re.captures_str(line)) {
+                Option.Some(groups) => {
+                    var fields: Map<string, string> = Map.new();
+                    var g = 1;
+                    while (g < groups.len()) {
+                        let name = if (g - 1 < p.names.len()) {
+                            p.names[g - 1]
+                        } else {
+                            "g" + to_string(g)
+                        };
+                        let value = match (groups[g]) {
+                            Option.Some(s) => s,
+                            Option.None => "",
+                        };
+                        fields.insert(name, value);
+                        g = g + 1;
+                    }
+                    Parsed.Line(Event { raw: line, fields: fields })
+                },
+                Option.None => Parsed.Bad,
+            }
+        },
+        Option.None => Parsed.Bad,
+    }
+}
+
+// Parses one line according to the configured mode. Skip = consumed without
+// producing an event (CSV header, blank line); Bad = malformed for the mode.
+pub fn parse_line(p: Parser, line: string) -> Parsed {
+    match (p.mode) {
+        Mode.Plain => {
+            var fields: Map<string, string> = Map.new();
+            fields.insert("line", line);
+            Parsed.Line(Event { raw: line, fields: fields })
+        },
+        Mode.JsonLines => {
+            if (line.trim() == "") {
+                return Parsed.Skip;
+            }
+            parse_json_line(line)
+        },
+        Mode.CsvLines => {
+            if (line.trim() == "") {
+                return Parsed.Skip;
+            }
+            parse_csv_line(p, line)
+        },
+        Mode.Regexp => parse_regex_line(p, line),
+    }
+}
+
+// Field lookup with the "line" pseudo-field falling back to the raw text.
+pub fn field_of(e: Event, key: string) -> Option<string> {
+    match (get(e.fields, key)) {
+        Option.Some(v) => Option.Some(v),
+        Option.None => {
+            if (key == "line") {
+                return Option.Some(e.raw);
+            }
+            Option.None
+        },
+    }
+}

@@ -1,0 +1,268 @@
+// raylogs — streaming log analyzer: parse, filter and aggregate logs from
+// stdin or a file without ever holding the input in memory.
+import reader;
+import parse;
+import filter;
+import agg;
+import render;
+
+fn usage() {
+    eprint("usage: raylogs [FILE] [options]        (FILE omitted or '-' = stdin)");
+    eprint("");
+    eprint("input format (default: plain, whole line as field 'line'):");
+    eprint("  --json                each line is a JSON object");
+    eprint("  --csv [--header]      CSV lines; --header names columns from the first line");
+    eprint("  --regex PATTERN       capture groups become fields g1..gN");
+    eprint("  --fields a,b,c        names for the regex capture groups");
+    eprint("");
+    eprint("processing:");
+    eprint(
+        "  --filter EXPR         repeatable; key=v key!=v key~re key!~re key>n key<n key>=n key<=n"
+    );
+    eprint("  --count               print only the number of matching lines");
+    eprint("  --count-by KEY        count lines grouped by a field");
+    eprint(
+        "  --top N               with --count-by: keep the N most frequent (default 20, 0 = all)"
+    );
+    eprint("  --stats KEY           numeric stats: count/min/max/avg/p50/p90/p99");
+    eprint("");
+    eprint("output:");
+    eprint("  --output table|json   aggregate/passthrough format (default table)");
+    eprint("  -f, --follow          keep reading a file when EOF is reached (tail -f)");
+}
+
+struct Opts {
+    file: string,
+    mode: string,
+    pattern: string,
+    field_names: [string],
+    header: bool,
+    filters: [string],
+    count_only: bool,
+    count_key: string,
+    stats_key: string,
+    top: int,
+    output: string,
+    follow: bool,
+}
+
+fn split_names(s: string) -> [string] {
+    var out: [string] = [];
+    for part in s.split(",") {
+        let name = part.trim();
+        if (name != "") {
+            out.push(name);
+        }
+    }
+    out
+}
+
+fn parse_opts(av: [string]) -> Result<Opts, string> {
+    var names: [string] = [];
+    var filters: [string] = [];
+    var opts = Opts {
+        file: "",
+        mode: "plain",
+        pattern: "",
+        field_names: names,
+        header: false,
+        filters: filters,
+        count_only: false,
+        count_key: "",
+        stats_key: "",
+        top: 20,
+        output: "table",
+        follow: false
+    };
+    var i = 0;
+    while (i < av.len()) {
+        let a = av[i];
+        if (a == "--json") {
+            opts.mode = "json";
+        } else if (a == "--csv") {
+            opts.mode = "csv";
+        } else if (a == "--header") {
+            opts.header = true;
+        } else if (a == "--regex") {
+            opts.mode = "regex";
+            opts.pattern = need_value(av, i, a)?;
+            i = i + 1;
+        } else if (a == "--fields") {
+            opts.field_names = split_names(need_value(av, i, a)?);
+            i = i + 1;
+        } else if (a == "--filter") {
+            opts.filters.push(need_value(av, i, a)?);
+            i = i + 1;
+        } else if (a == "--count") {
+            opts.count_only = true;
+        } else if (a == "--count-by") {
+            opts.count_key = need_value(av, i, a)?;
+            i = i + 1;
+        } else if (a == "--stats") {
+            opts.stats_key = need_value(av, i, a)?;
+            i = i + 1;
+        } else if (a == "--top") {
+            let v = need_value(av, i, a)?;
+            match (parse_int(v)) {
+                Option.Some(n) => {
+                    opts.top = n;
+                },
+                Option.None => {
+                    return Result.Err("--top: '" + v + "' is not a number");
+                },
+            }
+            i = i + 1;
+        } else if (a == "--output" || a == "-o") {
+            let v = need_value(av, i, a)?;
+            if (v != "table" && v != "json") {
+                return Result.Err("--output: expected 'table' or 'json', got '" + v + "'");
+            }
+            opts.output = v;
+            i = i + 1;
+        } else if (a == "--follow" || a == "-f") {
+            opts.follow = true;
+        } else if (a == "--help" || a == "-h") {
+            return Result.Err("help");
+        } else if (a.len() > 1 && a[0] == '-' && a != "-") {
+            return Result.Err("unknown option: " + a);
+        } else {
+            if (opts.file != "") {
+                return Result.Err("more than one input file: " + opts.file + ", " + a);
+            }
+            opts.file = a;
+        }
+        i = i + 1;
+    }
+    Result.Ok(opts)
+}
+
+fn need_value(av: [string], i: int, name: string) -> Result<string, string> {
+    if (i + 1 >= av.len()) {
+        return Result.Err(name + " needs a value");
+    }
+    Result.Ok(av[i + 1])
+}
+
+fn build_parser(opts: Opts) -> Result<parse.Parser, string> {
+    if (opts.mode == "json") {
+        return Result.Ok(parse.json_lines());
+    }
+    if (opts.mode == "csv") {
+        return Result.Ok(parse.csv_lines(opts.header));
+    }
+    if (opts.mode == "regex") {
+        return parse.regexp(opts.pattern, opts.field_names);
+    }
+    Result.Ok(parse.plain())
+}
+
+fn run(opts: Opts) -> Result<int, string> {
+    let p = build_parser(opts)?;
+    var filters: [filter.Filter] = [];
+    for expr in opts.filters {
+        filters.push(filter.parse_filter(expr)?);
+    }
+    let aggregating = opts.count_key != "" || opts.stats_key != "" || opts.count_only;
+    if (opts.follow && aggregating) {
+        return Result.Err("--follow cannot be combined with --count/--count-by/--stats");
+    }
+    let r = reader.open(opts.file, opts.follow)?;
+    var counter = agg.count_by(opts.count_key);
+    var st = agg.stats(opts.stats_key);
+    var matched = 0;
+    var bad = 0;
+    var done = false;
+    while (!done) {
+        match (reader.next_line(r)) {
+            Option.Some(line) => {
+                match (parse.parse_line(p, line)) {
+                    parse.Parsed.Line(e) => {
+                        if (filter.accept_all(filters, e)) {
+                            matched = matched + 1;
+                            if (opts.count_key != "") {
+                                agg.add_count(counter, e);
+                            } else if (opts.stats_key != "") {
+                                agg.add_stat(st, e);
+                            } else if (!opts.count_only) {
+                                if (opts.output == "json") {
+                                    print(render.event_json(e));
+                                } else {
+                                    print(e.raw);
+                                }
+                            }
+                        }
+                    },
+                    parse.Parsed.Skip => { },
+                    parse.Parsed.Bad => {
+                        bad = bad + 1;
+                    },
+                }
+            },
+            Option.None => {
+                done = true;
+            },
+        }
+    }
+    reader.close_reader(r);
+    if (opts.count_only) {
+        print(to_string(matched));
+    } else if (opts.count_key != "") {
+        let entries = agg.top_entries(counter, opts.top);
+        if (opts.output == "json") {
+            render.count_json(opts.count_key, entries);
+        } else {
+            render.count_table(opts.count_key, entries);
+        }
+        if (counter.missing > 0) {
+            eprint(
+                "raylogs: " + to_string(counter.missing) + " matching line(s) had no field '" + opts.count_key + "'"
+            );
+        }
+    } else if (opts.stats_key != "") {
+        match (agg.finish_stats(st)) {
+            Option.Some(res) => {
+                if (opts.output == "json") {
+                    render.stats_json(opts.stats_key, res);
+                } else {
+                    render.stats_table(opts.stats_key, res);
+                }
+            },
+            Option.None => {
+                eprint("raylogs: no numeric values for field '" + opts.stats_key + "'");
+            },
+        }
+        if (st.non_numeric > 0) {
+            eprint(
+                "raylogs: " + to_string(st.non_numeric) + " non-numeric value(s) for field '" + opts.stats_key + "' skipped"
+            );
+        }
+    }
+    let bad_total = bad + r.bad_utf8;
+    if (bad_total > 0) {
+        eprint("raylogs: " + to_string(bad_total) + " malformed line(s) skipped");
+    }
+    Result.Ok(0)
+}
+
+fn main() -> int {
+    match (parse_opts(args())) {
+        Result.Ok(opts) => {
+            match (run(opts)) {
+                Result.Ok(code) => code,
+                Result.Err(e) => {
+                    eprint("raylogs: " + e);
+                    1
+                },
+            }
+        },
+        Result.Err(e) => {
+            if (e == "help") {
+                usage();
+                return 0;
+            }
+            eprint("raylogs: " + e);
+            usage();
+            1
+        },
+    }
+}

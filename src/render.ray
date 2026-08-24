@@ -1,0 +1,122 @@
+// raylogs — output: aligned tables and JSON lines.
+import std/text;
+import std/json;
+from std/json import Json;
+from parse import Event, fmt_num;
+from agg import Entry, StatsResult;
+
+// Numeric cells are right-aligned, the rest left-aligned.
+fn pad_cell(s: string, width: int) -> string {
+    match (parse_float(s)) {
+        Option.Some(f) => text.pad_left(s, width, " "),
+        Option.None => text.pad_right(s, width, " "),
+    }
+}
+
+pub fn table(headers: [string], rows: [[string]]) {
+    var widths: [int] = [];
+    for h in headers {
+        widths.push(h.len());
+    }
+    for row in rows {
+        var i = 0;
+        while (i < row.len() && i < widths.len()) {
+            if (row[i].len() > widths[i]) {
+                widths[i] = row[i].len();
+            }
+            i = i + 1;
+        }
+    }
+    var head = "";
+    var sep = "";
+    var i = 0;
+    while (i < headers.len()) {
+        if (i > 0) {
+            head = head + "  ";
+            sep = sep + "  ";
+        }
+        head = head + text.pad_right(headers[i], widths[i], " ");
+        sep = sep + "-".repeat(widths[i]);
+        i = i + 1;
+    }
+    print(head);
+    print(sep);
+    for row in rows {
+        var line = "";
+        var j = 0;
+        while (j < row.len()) {
+            if (j > 0) {
+                line = line + "  ";
+            }
+            let w = if (j < widths.len()) { widths[j] } else { row[j].len() };
+            line = line + pad_cell(row[j], w);
+            j = j + 1;
+        }
+        print(line);
+    }
+}
+
+fn json_str(s: string) -> string {
+    json.stringify(Json.JStr(s))
+}
+
+// One event as a JSON object of its fields (raylogs' JSON passthrough).
+pub fn event_json(e: Event) -> string {
+    var m: Map<string, Json> = Map.new();
+    for k in e.fields.keys() {
+        match (get(e.fields, k)) {
+            Option.Some(v) => {
+                m.insert(k, Json.JStr(v));
+            },
+            Option.None => { },
+        }
+    }
+    json.stringify(Json.JObject(m))
+}
+
+pub fn count_table(key: string, entries: [Entry]) {
+    var rows: [[string]] = [];
+    for en in entries {
+        rows.push([en.name, to_string(en.count)]);
+    }
+    table([key, "count"], rows);
+}
+
+// count-by as JSON lines: {"<key>": name, "count": n} per group.
+pub fn count_json(key: string, entries: [Entry]) {
+    for en in entries {
+        print(
+            "{" + json_str(key) + ":" + json_str(en.name) + ",\"count\":" + to_string(en.count) + "}"
+        );
+    }
+}
+
+pub fn stats_table(key: string, r: StatsResult) {
+    let headers = ["field", "count", "min", "max", "avg", "p50", "p90", "p99"];
+    let row = [
+        key,
+        to_string(r.count),
+        fmt_num(r.min),
+        fmt_num(r.max),
+        fmt_num(r.avg),
+        fmt_num(r.p50),
+        fmt_num(r.p90),
+        fmt_num(r.p99)
+    ];
+    var rows: [[string]] = [];
+    rows.push(row);
+    table(headers, rows);
+}
+
+pub fn stats_json(key: string, r: StatsResult) {
+    var m: Map<string, Json> = Map.new();
+    m.insert("field", Json.JStr(key));
+    m.insert("count", Json.JNum(r.count as float));
+    m.insert("min", Json.JNum(r.min));
+    m.insert("max", Json.JNum(r.max));
+    m.insert("avg", Json.JNum(r.avg));
+    m.insert("p50", Json.JNum(r.p50));
+    m.insert("p90", Json.JNum(r.p90));
+    m.insert("p99", Json.JNum(r.p99));
+    print(json.stringify(Json.JObject(m)));
+}

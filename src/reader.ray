@@ -1,0 +1,164 @@
+// raylogs — streaming line reader over stdin or a file.
+//
+// Lines are split at the BYTE level (LF, with a trailing CR stripped), so a
+// UTF-8 sequence torn across two read chunks never reaches the decoder: only
+// complete lines are decoded. Memory is bounded by the longest line, not by
+// the input size.
+import std/io;
+import std/fs;
+import std/time;
+
+const CHUNK: int = 65536;
+
+const FOLLOW_POLL_MS: int = 200;
+
+pub enum Source {
+    Stdin,
+    File(int),
+}
+
+pub struct Reader {
+    source: Source,
+    buf: bytes,
+    scan: int,
+    eof: bool,
+    follow: bool,
+    bad_utf8: int,
+}
+
+fn empty_bytes() -> bytes {
+    var empty: [int] = [];
+    bytes_of(empty)
+}
+
+// Opens the input. "" or "-" means stdin. With follow=true a file reader
+// keeps polling for appended data after EOF (tail -f); stdin EOF is final.
+pub fn open(path: string, follow: bool) -> Result<Reader, string> {
+    if (path == "" || path == "-") {
+        return Result.Ok(
+            Reader {
+                source: Source.Stdin,
+                buf: empty_bytes(),
+                scan: 0,
+                eof: false,
+                follow: follow,
+                bad_utf8: 0
+            }
+        );
+    }
+    let h = fs.open(path, "r")?;
+    Result.Ok(
+        Reader {
+            source: Source.File(h),
+            buf: empty_bytes(),
+            scan: 0,
+            eof: false,
+            follow: follow,
+            bad_utf8: 0
+        }
+    )
+}
+
+pub fn close_reader(r: Reader) {
+    match (r.source) {
+        Source.Stdin => { },
+        Source.File(h) => {
+            close(h);
+        },
+    }
+}
+
+// Extracts buf[0..end) as a line (minus a trailing CR) and drops it plus the
+// LF from the buffer. None if the line is not valid UTF-8 (counted).
+fn take_line(r: Reader, end: int) -> Option<string> {
+    var stop = end;
+    if (stop > 0 && r.buf[stop - 1] == 13) {
+        stop = stop - 1;
+    }
+    let line_bytes = r.buf.sub_bytes(0, stop);
+    r.buf = r.buf.sub_bytes(end + 1, r.buf.len());
+    r.scan = 0;
+    match (from_utf8(line_bytes)) {
+        Result.Ok(s) => Option.Some(s),
+        Result.Err(e) => {
+            r.bad_utf8 = r.bad_utf8 + 1;
+            Option.None
+        },
+    }
+}
+
+fn fill(r: Reader) {
+    match (r.source) {
+        Source.Stdin => {
+            match (io.read(CHUNK)) {
+                Option.Some(chunk) => {
+                    r.buf = r.buf + chunk;
+                },
+                Option.None => {
+                    r.eof = true;
+                },
+            }
+        },
+        Source.File(h) => {
+            match (fs.read_bytes(h, CHUNK)) {
+                Result.Ok(chunk_opt) => {
+                    match (chunk_opt) {
+                        Option.Some(chunk) => {
+                            r.buf = r.buf + chunk;
+                        },
+                        Option.None => {
+                            if (r.follow) {
+                                time.sleep(FOLLOW_POLL_MS);
+                            } else {
+                                r.eof = true;
+                            }
+                        },
+                    }
+                },
+                Result.Err(e) => {
+                    r.eof = true;
+                },
+            }
+        },
+    }
+}
+
+// The next line without its terminator; None = end of input. Lines that are
+// not valid UTF-8 are skipped and counted in r.bad_utf8.
+pub fn next_line(r: Reader) -> Option<string> {
+    while (true) {
+        var i = r.scan;
+        while (i < r.buf.len()) {
+            if (r.buf[i] == 10) {
+                match (take_line(r, i)) {
+                    Option.Some(s) => {
+                        return Option.Some(s);
+                    },
+                    Option.None => {
+                        i = 0 - 1;
+                    },
+                }
+            }
+            i = i + 1;
+        }
+        r.scan = i;
+        if (r.eof) {
+            if (r.buf.len() > 0) {
+                let tail = r.buf;
+                r.buf = empty_bytes();
+                r.scan = 0;
+                match (from_utf8(tail)) {
+                    Result.Ok(s) => {
+                        return Option.Some(s);
+                    },
+                    Result.Err(e) => {
+                        r.bad_utf8 = r.bad_utf8 + 1;
+                    },
+                }
+            }
+            return Option.None;
+        }
+        fill(r);
+    }
+    Option.None
+}

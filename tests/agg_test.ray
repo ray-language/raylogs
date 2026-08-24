@@ -1,0 +1,85 @@
+// Aggregation tests: count-by ordering and numeric stats/percentiles.
+import parse;
+import agg;
+
+fn json_event(line: string) -> parse.Event {
+    let p = parse.json_lines();
+    match (parse.parse_line(p, line)) {
+        parse.Parsed.Line(e) => e,
+        _ => panic("bad test event: " + line),
+    }
+}
+
+@test
+fn count_by_orders_desc_then_by_name() {
+    var c = agg.count_by("level");
+    agg.add_count(c, json_event("{\"level\":\"info\"}"));
+    agg.add_count(c, json_event("{\"level\":\"error\"}"));
+    agg.add_count(c, json_event("{\"level\":\"info\"}"));
+    agg.add_count(c, json_event("{\"level\":\"warn\"}"));
+    let entries = agg.top_entries(c, 0);
+    assert_eq(entries.len(), 3);
+    assert_eq(entries[0].name, "info");
+    assert_eq(entries[0].count, 2);
+    assert_eq(entries[1].name, "error");
+    assert_eq(entries[2].name, "warn");
+}
+
+@test
+fn count_by_top_limits_and_counts_missing() {
+    var c = agg.count_by("level");
+    agg.add_count(c, json_event("{\"level\":\"a\"}"));
+    agg.add_count(c, json_event("{\"level\":\"b\"}"));
+    agg.add_count(c, json_event("{\"other\":1}"));
+    assert_eq(agg.top_entries(c, 1).len(), 1);
+    assert_eq(c.missing, 1);
+    assert_eq(c.total, 2);
+}
+
+@test
+fn stats_percentiles_nearest_rank() {
+    var s = agg.stats("v");
+    var i = 1;
+    while (i <= 100) {
+        agg.add_stat(s, json_event("{\"v\":" + to_string(i) + "}"));
+        i = i + 1;
+    }
+    match (agg.finish_stats(s)) {
+        Option.Some(r) => {
+            assert_eq(r.count, 100);
+            assert_eq(r.min, 1.0);
+            assert_eq(r.max, 100.0);
+            assert_eq(r.avg, 50.5);
+            assert_eq(r.p50, 50.0);
+            assert_eq(r.p90, 90.0);
+            assert_eq(r.p99, 99.0);
+        },
+        Option.None => panic("expected stats"),
+    }
+}
+
+@test
+fn stats_skips_non_numeric_and_missing() {
+    var s = agg.stats("v");
+    agg.add_stat(s, json_event("{\"v\":10}"));
+    agg.add_stat(s, json_event("{\"v\":\"slow\"}"));
+    agg.add_stat(s, json_event("{\"w\":1}"));
+    assert_eq(s.non_numeric, 1);
+    assert_eq(s.missing, 1);
+    match (agg.finish_stats(s)) {
+        Option.Some(r) => {
+            assert_eq(r.count, 1);
+            assert_eq(r.min, 10.0);
+        },
+        Option.None => panic("expected stats"),
+    }
+}
+
+@test
+fn stats_with_no_values_is_none() {
+    var s = agg.stats("v");
+    match (agg.finish_stats(s)) {
+        Option.None => { },
+        Option.Some(r) => panic("expected None"),
+    }
+}

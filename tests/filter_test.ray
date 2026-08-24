@@ -1,0 +1,100 @@
+// Filter expression tests: operator parsing and matching semantics.
+import parse;
+import filter;
+
+fn json_event(line: string) -> parse.Event {
+    let p = parse.json_lines();
+    match (parse.parse_line(p, line)) {
+        parse.Parsed.Line(e) => e,
+        _ => panic("bad test event: " + line),
+    }
+}
+
+fn must(expr: string) -> filter.Filter {
+    match (filter.parse_filter(expr)) {
+        Result.Ok(f) => f,
+        Result.Err(e) => panic(e),
+    }
+}
+
+@test
+fn eq_and_ne() {
+    let e = json_event("{\"level\":\"error\",\"status\":500}");
+    assert(filter.accept(must("level=error"), e));
+    assert(!filter.accept(must("level=info"), e));
+    assert(filter.accept(must("level!=info"), e));
+    assert(!filter.accept(must("level!=error"), e));
+}
+
+@test
+fn ne_wins_over_eq_at_same_position() {
+    let f = must("level!=info");
+    assert_eq(f.key, "level");
+    assert_eq(f.value, "info");
+}
+
+@test
+fn numeric_comparisons() {
+    let e = json_event("{\"ms\":42.5}");
+    assert(filter.accept(must("ms>10"), e));
+    assert(!filter.accept(must("ms>42.5"), e));
+    assert(filter.accept(must("ms>=42.5"), e));
+    assert(filter.accept(must("ms<100"), e));
+    assert(filter.accept(must("ms<=42.5"), e));
+    assert(!filter.accept(must("ms<42.5"), e));
+}
+
+@test
+fn numeric_filter_on_non_numeric_field_never_matches() {
+    let e = json_event("{\"ms\":\"fast\"}");
+    assert(!filter.accept(must("ms>0"), e));
+    assert(!filter.accept(must("ms<9999"), e));
+}
+
+@test
+fn regex_match_and_not_match() {
+    let e = json_event("{\"path\":\"/api/users/42\"}");
+    assert(filter.accept(must("path~^/api/"), e));
+    assert(!filter.accept(must("path~^/web/"), e));
+    assert(filter.accept(must("path!~^/web/"), e));
+    assert(!filter.accept(must("path!~users"), e));
+}
+
+@test
+fn missing_field_never_matches() {
+    let e = json_event("{\"level\":\"info\"}");
+    assert(!filter.accept(must("status=200"), e));
+    assert(!filter.accept(must("status!=200"), e));
+}
+
+@test
+fn value_may_contain_the_operator_character() {
+    let f = must("msg=a=b");
+    assert_eq(f.key, "msg");
+    assert_eq(f.value, "a=b");
+}
+
+@test
+fn parse_errors_are_values() {
+    match (filter.parse_filter("no operator here")) {
+        Result.Err(e) => { },
+        Result.Ok(f) => panic("expected an error"),
+    }
+    match (filter.parse_filter("ms>fast")) {
+        Result.Err(e) => { },
+        Result.Ok(f) => panic("expected an error: non-numeric bound"),
+    }
+    match (filter.parse_filter("=value")) {
+        Result.Err(e) => { },
+        Result.Ok(f) => panic("expected an error: missing key"),
+    }
+}
+
+@test
+fn accept_all_requires_every_filter() {
+    let e = json_event("{\"level\":\"error\",\"ms\":120}");
+    let fs = [must("level=error"), must("ms>100")];
+    assert(filter.accept_all(fs, e));
+    let fs2 = [must("level=error"), must("ms>200")];
+    assert(!filter.accept_all(fs2, e));
+}
