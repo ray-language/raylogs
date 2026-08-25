@@ -1,6 +1,6 @@
 # raylogs
 
-Analizador de logs en **streaming**, escrito en [raylang](https://github.com/roberto-ayala/raylang): lee líneas por stdin o de un archivo (sin cargar la entrada en memoria), las parsea (JSON, CSV, regex o texto plano), filtra por campos y agrega (conteos por grupo, percentiles). Estilo angle-grinder/lnav, en pequeño.
+Analizador de logs en **streaming**, escrito en [raylang](https://github.com/ray-language/raylang): lee líneas por stdin o de un archivo (sin cargar la entrada en memoria), las parsea (JSON, CSV, regex o texto plano), filtra por campos y agrega (conteos por grupo, percentiles). Estilo angle-grinder/lnav, en pequeño.
 
 ```text
 $ raylogs access.log --regex '^(\S+) (\w+) (\S+) (\d+) (\d+)$' \
