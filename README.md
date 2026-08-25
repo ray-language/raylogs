@@ -56,7 +56,7 @@ Las líneas malformadas para el formato se saltan y se reportan al final por std
 | Filtros compuestos: `= != ~ !~ > < >= <=` (numéricos y regex) | ✅ |
 | `--count`, `--count-by` (+`--top`), `--stats` (percentiles nearest-rank) | ✅ |
 | Salida tabla alineada (números a la derecha) o JSON | ✅ |
-| `--follow` (tail -f por sondeo de EOF cada 200 ms) | ✅ |
+| `--follow` (tail -f por EVENTOS de kernel — fs.watch, raylang M115.4) | ✅ |
 | Binario nativo (`ray build --native`) | ✅ |
 | Tests (parser, filtros, agregación, reader con archivos reales) | ✅ 27 |
 | Ventanas temporales (`--window`), agregación en vivo con `--follow` | 📋 v2 |
@@ -79,11 +79,11 @@ completo + Map por grupo). La brecha VM/nativo en este workload es 27–40×.
 
 1. **`sort([float])` rompe el build nativo**: compila y corre en la VM, pero el
    transpilador emite `__ray_sort<T: Ord>` y `f64` no es `Ord` en Rust
-   (`error[E0277]`). Workaround aquí: mergesort propio de floats en
-   `src/agg.ray`.
-2. **No hay `tail -f`**: `--follow` se compone a mano con `fs.read_bytes` a EOF
-   + `time.sleep(200)` (lo que IDEAS-APPS ya predecía). Un watch de fs
-   beneficiaría también a raysync/raysite/`ray dev`.
+   (`error[E0277]`). [RESUELTO en raylang, PR #140: `sort([float])` compila
+   nativo]; el mergesort propio de `src/agg.ray` ya no es necesario.
+2. **[RESUELTO — raylang M115.4]** No hay `tail -f`: `fs.watch` existe y
+   `--follow` aparca en eventos de kernel (con degradación a sleep-poll si el
+   watch no se puede armar).
 3. **`std/regex` no tiene grupos con nombre** (`(?P<name>...)`): los nombres se
    inyectan por CLI con `--fields`. Para un analizador de logs es la ergonomía
    que se espera.

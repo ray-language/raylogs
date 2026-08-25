@@ -23,6 +23,7 @@ pub struct Reader {
     scan: int,
     eof: bool,
     follow: bool,
+    watch_h: int,
     bad_utf8: int,
 }
 
@@ -32,7 +33,9 @@ fn empty_bytes() -> bytes {
 }
 
 // Opens the input. "" or "-" means stdin. With follow=true a file reader
-// keeps polling for appended data after EOF (tail -f); stdin EOF is final.
+// PARKS on kernel fs events after EOF (fs.watch, raylang M115.4) and re-reads
+// when the file changes — real tail -f, no mtime polling. If the watch cannot
+// be armed it degrades to the old sleep-poll. stdin EOF is final.
 pub fn open(path: string, follow: bool) -> Result<Reader, string> {
     if (path == "" || path == "-") {
         return Result.Ok(
@@ -42,11 +45,21 @@ pub fn open(path: string, follow: bool) -> Result<Reader, string> {
                 scan: 0,
                 eof: false,
                 follow: follow,
+                watch_h: 0,
                 bad_utf8: 0
             }
         );
     }
     let h = fs.open(path, "r")?;
+    // Con --follow, arma el watch de kernel (0 = no se pudo → degrada a sleep-poll).
+    let w = if (follow) {
+        match (fs.watch(path)) {
+            Result.Ok(x) => x,
+            Result.Err(_e) => 0,
+        }
+    } else {
+        0
+    };
     Result.Ok(
         Reader {
             source: Source.File(h),
@@ -54,6 +67,7 @@ pub fn open(path: string, follow: bool) -> Result<Reader, string> {
             scan: 0,
             eof: false,
             follow: follow,
+            watch_h: w,
             bad_utf8: 0
         }
     )
@@ -108,7 +122,13 @@ fn fill(r: Reader) {
                         },
                         Option.None => {
                             if (r.follow) {
-                                time.sleep(FOLLOW_POLL_MS);
+                                if (r.watch_h > 0) {
+                                    // Aparca hasta el proximo evento del archivo (el plazo de
+                                    // 1 s re-chequea por si el evento se pierde en una rotacion).
+                                    let _ = fs.next_event_timeout(r.watch_h, 1000);
+                                } else {
+                                    time.sleep(FOLLOW_POLL_MS);
+                                }
                             } else {
                                 r.eof = true;
                             }
