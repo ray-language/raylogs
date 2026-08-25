@@ -151,52 +151,6 @@ pub struct StatsResult {
     p99: float,
 }
 
-// Own float mergesort: the builtin `sort` on [float] compiles on the VM but
-// breaks the native transpiler (its __ray_sort requires Rust's Ord, which f64
-// does not implement). Remove once the toolchain sorts floats natively.
-fn merge_floats(a: [float], b: [float]) -> [float] {
-    var out: [float] = [];
-    var i = 0;
-    var j = 0;
-    while (i < a.len() && j < b.len()) {
-        if (a[i] <= b[j]) {
-            out.push(a[i]);
-            i = i + 1;
-        } else {
-            out.push(b[j]);
-            j = j + 1;
-        }
-    }
-    while (i < a.len()) {
-        out.push(a[i]);
-        i = i + 1;
-    }
-    while (j < b.len()) {
-        out.push(b[j]);
-        j = j + 1;
-    }
-    out
-}
-
-fn sort_floats(xs: [float]) -> [float] {
-    if (xs.len() <= 1) {
-        return xs;
-    }
-    let mid = xs.len() / 2;
-    var left: [float] = [];
-    var right: [float] = [];
-    var i = 0;
-    while (i < xs.len()) {
-        if (i < mid) {
-            left.push(xs[i]);
-        } else {
-            right.push(xs[i]);
-        }
-        i = i + 1;
-    }
-    merge_floats(sort_floats(left), sort_floats(right))
-}
-
 // Nearest-rank percentile over a sorted array (q in [0, 1]).
 fn percentile(ordered: [float], q: float) -> float {
     let n = ordered.len();
@@ -214,7 +168,8 @@ pub fn finish_stats(s: Stats) -> Option<StatsResult> {
     if (s.values.len() == 0) {
         return Option.None;
     }
-    let ordered = sort_floats(s.values);
+    // El builtin sort sobre [float] compila nativo desde raylang PR #140.
+    let ordered = sort(s.values);
     let n = ordered.len();
     var total = 0.0;
     for v in ordered {
