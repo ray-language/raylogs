@@ -86,7 +86,13 @@ pub fn count_table(key: string, entries: [Entry]) {
 pub fn count_json(key: string, entries: [Entry]) {
     for en in entries {
         print(
-            "{" + json_str(key) + ":" + json_str(en.name) + ",\"count\":" + to_string(en.count) + "}"
+            "{"
+                + json_str(key)
+                + ":"
+                + json_str(en.name)
+                + ",\"count\":"
+                + to_string(en.count)
+                + "}"
         );
     }
 }
