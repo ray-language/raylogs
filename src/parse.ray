@@ -51,14 +51,29 @@ pub fn csv_lines(header: bool) -> Parser {
     Parser { mode: Mode.CsvLines, re: re, names: names, header: header, saw_header: false }
 }
 
-// Capture groups become fields, named by `names` in order (g1..gN past the end).
+// Capture groups become fields. Group g is named by `names[g-1]` when given
+// (--fields), else by its own name in the pattern (`(?P<name>...)` or
+// `(?<name>...)`), else "g<g>".
 pub fn regexp(pattern: string, names: [string]) -> Result<Parser, string> {
     let re = regex.compile(pattern)?;
+    let in_pattern = regex.group_names(re);
+    var resolved: [string] = [];
+    var g = 1;
+    while (g < in_pattern.len()) {
+        if (g - 1 < names.len()) {
+            resolved.push(names[g - 1]);
+        } else if (in_pattern[g] != "") {
+            resolved.push(in_pattern[g]);
+        } else {
+            resolved.push("g" + to_string(g));
+        }
+        g = g + 1;
+    }
     Result.Ok(
         Parser {
             mode: Mode.Regexp,
             re: Option.Some(re),
-            names: names,
+            names: resolved,
             header: false,
             saw_header: false
         }

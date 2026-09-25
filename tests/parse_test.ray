@@ -81,6 +81,25 @@ fn regex_groups_take_given_names_then_gn() {
 }
 
 @test
+fn regex_named_groups_name_fields_unless_overridden() {
+    let p = match (parse.regexp("(?P<user>\\w+) (?<code>\\d+) (\\S+)", [])) {
+        Result.Ok(x) => x,
+        Result.Err(e) => panic(e),
+    };
+    let e = event_of(p, "ana 42 /home");
+    assert_eq(field(e, "user"), "ana");
+    assert_eq(field(e, "code"), "42");
+    assert_eq(field(e, "g3"), "/home");
+    let q = match (parse.regexp("(?P<user>\\w+) (\\d+)", ["who"])) {
+        Result.Ok(x) => x,
+        Result.Err(e) => panic(e),
+    };
+    let e2 = event_of(q, "ana 42");
+    assert_eq(field(e2, "who"), "ana");
+    assert_eq(field(e2, "g2"), "42");
+}
+
+@test
 fn regex_non_matching_line_is_bad() {
     let p = match (parse.regexp("^\\d+$", [])) {
         Result.Ok(x) => x,
