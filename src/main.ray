@@ -215,7 +215,11 @@ fn run(opts: Opts) -> Result<int, string> {
         }
         if (counter.missing > 0) {
             eprint(
-                "raylogs: " + to_string(counter.missing) + " matching line(s) had no field '" + opts.count_key + "'"
+                "raylogs: "
+                    + to_string(counter.missing)
+                    + " matching line(s) had no field '"
+                    + opts.count_key
+                    + "'"
             );
         }
     } else if (opts.stats_key != "") {
@@ -233,7 +237,11 @@ fn run(opts: Opts) -> Result<int, string> {
         }
         if (st.non_numeric > 0) {
             eprint(
-                "raylogs: " + to_string(st.non_numeric) + " non-numeric value(s) for field '" + opts.stats_key + "' skipped"
+                "raylogs: "
+                    + to_string(st.non_numeric)
+                    + " non-numeric value(s) for field '"
+                    + opts.stats_key
+                    + "' skipped"
             );
         }
     }
