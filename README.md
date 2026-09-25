@@ -27,8 +27,8 @@ raylogs [FILE] [opciones]          FILE omitido o '-' = stdin
 formato de entrada (por defecto: plano; la línea entera es el campo 'line'):
   --json                cada línea es un objeto JSON (campos de primer nivel)
   --csv [--header]      líneas CSV; --header nombra columnas con la primera línea
-  --regex PATTERN       los grupos de captura se vuelven campos g1..gN
-  --fields a,b,c        nombres para los grupos de captura del regex
+  --regex PATTERN       los grupos de captura se vuelven campos: (?P<nombre>...) o g1..gN
+  --fields a,b,c        nombres para los grupos de captura (tienen prioridad sobre los del patrón)
 
 procesado:
   --filter EXPR         repetible (AND); key=v key!=v key~re key!~re key>n key<n key>=n key<=n
@@ -52,13 +52,13 @@ Las líneas malformadas para el formato se saltan y se reportan al final por std
 |-----------|--------|
 | Lectura streaming stdin/archivo (memoria acotada por línea, no por entrada) | ✅ |
 | Split de líneas a nivel de BYTE (UTF-8 partido entre chunks nunca llega roto al decoder; CRLF; última línea sin `\n`) | ✅ |
-| Formatos: plano, JSON lines, CSV (con/sin cabecera), regex con grupos | ✅ |
+| Formatos: plano, JSON lines, CSV (con/sin cabecera), regex con grupos (con nombre o posicionales) | ✅ |
 | Filtros compuestos: `= != ~ !~ > < >= <=` (numéricos y regex) | ✅ |
 | `--count`, `--count-by` (+`--top`), `--stats` (percentiles nearest-rank) | ✅ |
 | Salida tabla alineada (números a la derecha) o JSON | ✅ |
 | `--follow` (tail -f por EVENTOS de kernel — fs.watch, raylang M115.4) | ✅ |
 | Binario nativo (`ray build --native`) | ✅ |
-| Tests (parser, filtros, agregación, reader con archivos reales) | ✅ 27 |
+| Tests (parser, filtros, agregación, reader con archivos reales) | ✅ 29 |
 | Ventanas temporales (`--window`), agregación en vivo con `--follow` | 📋 v2 |
 | Campos multilínea CSV (comillas que cruzan líneas) | ❌ fuera de v1 (parseo por línea) |
 
@@ -80,25 +80,30 @@ completo + Map por grupo). La brecha VM/nativo en este workload es 27–40×.
 1. **`sort([float])` rompe el build nativo**: compila y corre en la VM, pero el
    transpilador emite `__ray_sort<T: Ord>` y `f64` no es `Ord` en Rust
    (`error[E0277]`). [RESUELTO en raylang, PR #140: `sort([float])` compila
-   nativo]; el mergesort propio de `src/agg.ray` ya no es necesario.
+   nativo]; el mergesort propio de `src/agg.ray` se eliminó en favor del
+   builtin `sort_by` (raylang 1.11).
 2. **[RESUELTO — raylang M115.4]** No hay `tail -f`: `fs.watch` existe y
    `--follow` aparca en eventos de kernel (con degradación a sleep-poll si el
    watch no se puede armar).
-3. **`std/regex` no tiene grupos con nombre** (`(?P<name>...)`): los nombres se
-   inyectan por CLI con `--fields`. Para un analizador de logs es la ergonomía
-   que se espera.
+3. **[RESUELTO — raylang M128]** `std/regex` no tenía grupos con nombre: ahora
+   `(?P<name>...)`/`(?<name>...)` nombran los campos directamente
+   (`regex.group_names`); `--fields` sigue disponible y tiene prioridad.
 4. **`std/csv` parsea documentos, no streams**: `parse_csv` por línea funciona,
    pero un campo entrecomillado con `\n` dentro es invisible para un lector por
    líneas. Un parser incremental (push de chunks) sería la pieza streaming.
+   [RESUELTO en raylang M128: `csv.parser`/`feed`/`finish`; adoptarlo exige que
+   `--csv` deje de parsear por líneas — queda para v2.]
 5. Lo que SÍ estuvo a la altura: `io.read`/`fs.read_bytes` streaming con
-   `sub_bytes` por octeto hacen el line-splitting limpio; `captures_str` +
+   `sub_bytes` hacen el line-splitting limpio (desde raylang 1.20 la búsqueda
+   del `\n` es `bytes.index_of`, nativa: ~2.5× más rápido en la VM que el
+   bucle por octeto); `captures_str` +
    `Matcher` compilado; `parse_float` tolera espacios; la tabla de la stdlib
    (`text.pad_*`) alcanza para el render.
 
 ## Desarrollo
 
 ```sh
-ray test                                  # 27 tests
+ray test                                  # 29 tests
 ray run src/main.ray sample.jsonl --json --count-by level
 ray build --native src/main.ray -o raylogs --release
 ```

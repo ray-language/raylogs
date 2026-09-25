@@ -36,55 +36,12 @@ pub struct Entry {
     count: int,
 }
 
-fn merge_entries(a: [Entry], b: [Entry]) -> [Entry] {
-    var out: [Entry] = [];
-    var i = 0;
-    var j = 0;
-    while (i < a.len() && j < b.len()) {
-        if (entry_before(a[i], b[j])) {
-            out.push(a[i]);
-            i = i + 1;
-        } else {
-            out.push(b[j]);
-            j = j + 1;
-        }
-    }
-    while (i < a.len()) {
-        out.push(a[i]);
-        i = i + 1;
-    }
-    while (j < b.len()) {
-        out.push(b[j]);
-        j = j + 1;
-    }
-    out
-}
-
 // Descending by count; ties alphabetically by name for stable output.
 fn entry_before(x: Entry, y: Entry) -> bool {
     if (x.count != y.count) {
         return x.count > y.count;
     }
     x.name <= y.name
-}
-
-fn sort_entries(xs: [Entry]) -> [Entry] {
-    if (xs.len() <= 1) {
-        return xs;
-    }
-    let mid = xs.len() / 2;
-    var left: [Entry] = [];
-    var right: [Entry] = [];
-    var i = 0;
-    while (i < xs.len()) {
-        if (i < mid) {
-            left.push(xs[i]);
-        } else {
-            right.push(xs[i]);
-        }
-        i = i + 1;
-    }
-    merge_entries(sort_entries(left), sort_entries(right))
 }
 
 // The n most frequent groups (all of them if n <= 0), most frequent first.
@@ -98,7 +55,7 @@ pub fn top_entries(c: CountBy, n: int) -> [Entry] {
             Option.None => { },
         }
     }
-    let ordered = sort_entries(all);
+    let ordered = sort_by(all, entry_before);
     if (n <= 0 || ordered.len() <= n) {
         return ordered;
     }

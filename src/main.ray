@@ -12,8 +12,8 @@ fn usage() {
     eprint("input format (default: plain, whole line as field 'line'):");
     eprint("  --json                each line is a JSON object");
     eprint("  --csv [--header]      CSV lines; --header names columns from the first line");
-    eprint("  --regex PATTERN       capture groups become fields g1..gN");
-    eprint("  --fields a,b,c        names for the regex capture groups");
+    eprint("  --regex PATTERN       capture groups become fields: (?P<name>...) or g1..gN");
+    eprint("  --fields a,b,c        names for the regex capture groups (override the pattern's)");
     eprint("");
     eprint("processing:");
     eprint(
@@ -171,8 +171,7 @@ fn run(opts: Opts) -> Result<int, string> {
     var st = agg.stats(opts.stats_key);
     var matched = 0;
     var bad = 0;
-    var done = false;
-    while (!done) {
+    while (true) {
         match (reader.next_line(r)) {
             Option.Some(line) => {
                 match (parse.parse_line(p, line)) {
@@ -199,7 +198,7 @@ fn run(opts: Opts) -> Result<int, string> {
                 }
             },
             Option.None => {
-                done = true;
+                break;
             },
         }
     }

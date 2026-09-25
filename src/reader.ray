@@ -143,25 +143,38 @@ fn fill(r: Reader) {
     }
 }
 
+// Offset of the next LF at or after r.scan (the bytes before it were already
+// searched on a previous pass). Native octet search, no per-byte loop.
+fn find_lf(r: Reader) -> Option<int> {
+    let lf = "\n".to_bytes();
+    if (r.scan == 0) {
+        return r.buf.index_of(lf);
+    }
+    match (r.buf.sub_bytes(r.scan, r.buf.len()).index_of(lf)) {
+        Option.Some(j) => Option.Some(r.scan + j),
+        Option.None => Option.None,
+    }
+}
+
 // The next line without its terminator; None = end of input. Lines that are
 // not valid UTF-8 are skipped and counted in r.bad_utf8.
 pub fn next_line(r: Reader) -> Option<string> {
     while (true) {
-        var i = r.scan;
-        while (i < r.buf.len()) {
-            if (r.buf[i] == 10) {
+        match (find_lf(r)) {
+            Option.Some(i) => {
                 match (take_line(r, i)) {
                     Option.Some(s) => {
                         return Option.Some(s);
                     },
                     Option.None => {
-                        i = 0 - 1;
+                        continue;
                     },
                 }
-            }
-            i = i + 1;
+            },
+            Option.None => {
+                r.scan = r.buf.len();
+            },
         }
-        r.scan = i;
         if (r.eof) {
             if (r.buf.len() > 0) {
                 let tail = r.buf;
