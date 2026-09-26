@@ -96,7 +96,8 @@ completo + Map por grupo). La brecha VM/nativo en este workload es 27–40×.
 5. Lo que SÍ estuvo a la altura: `io.read`/`fs.read_bytes` streaming con
    `sub_bytes` hacen el line-splitting limpio (desde raylang 1.20 la búsqueda
    del `\n` es `bytes.index_of`, nativa: ~2.5× más rápido en la VM que el
-   bucle por octeto); `captures_str` +
+   bucle por octeto; desde 1.27.13 `index_of_from` reanuda la búsqueda sin
+   copiar la cola del búfer); `captures_str` +
    `Matcher` compilado; `parse_float` tolera espacios; la tabla de la stdlib
    (`text.pad_*`) alcanza para el render.
 
