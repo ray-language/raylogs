@@ -197,9 +197,7 @@ fn run(opts: Opts) -> Result<int, string> {
                     },
                 }
             },
-            Option.None => {
-                break;
-            },
+            Option.None => break,
         }
     }
     reader.close_reader(r);

@@ -14,9 +14,7 @@ fn read_all(path: string) -> [string] {
             Option.Some(line) => {
                 out.push(line);
             },
-            Option.None => {
-                break;
-            },
+            Option.None => break,
         }
     }
     reader.close_reader(r);

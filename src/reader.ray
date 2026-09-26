@@ -146,14 +146,7 @@ fn fill(r: Reader) {
 // Offset of the next LF at or after r.scan (the bytes before it were already
 // searched on a previous pass). Native octet search, no per-byte loop.
 fn find_lf(r: Reader) -> Option<int> {
-    let lf = "\n".to_bytes();
-    if (r.scan == 0) {
-        return r.buf.index_of(lf);
-    }
-    match (r.buf.sub_bytes(r.scan, r.buf.len()).index_of(lf)) {
-        Option.Some(j) => Option.Some(r.scan + j),
-        Option.None => Option.None,
-    }
+    r.buf.index_of_from("\n".to_bytes(), r.scan)
 }
 
 // The next line without its terminator; None = end of input. Lines that are
@@ -166,9 +159,7 @@ pub fn next_line(r: Reader) -> Option<string> {
                     Option.Some(s) => {
                         return Option.Some(s);
                     },
-                    Option.None => {
-                        continue;
-                    },
+                    Option.None => continue,
                 }
             },
             Option.None => {
@@ -193,5 +184,4 @@ pub fn next_line(r: Reader) -> Option<string> {
         }
         fill(r);
     }
-    Option.None
 }
